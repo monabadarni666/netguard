@@ -626,3 +626,38 @@ footer {
     text-align: left;
   }
 }
+.analytics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.analytics-panel {
+  min-height: 390px;
+}
+
+.chart-container {
+  width: 100%;
+  height: 300px;
+}
+
+.recharts-default-tooltip {
+  background: #0f2033 !important;
+  border: 1px solid #29435f !important;
+  border-radius: 8px !important;
+}
+
+.recharts-tooltip-label {
+  color: #ffffff !important;
+}
+
+.recharts-legend-item-text {
+  color: #9fb2c8 !important;
+}
+
+@media (max-width: 900px) {
+  .analytics-grid {
+    grid-template-columns: 1fr;
+  }
+}
