@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import math
 
 import joblib
 import pandas as pd
@@ -20,7 +21,10 @@ from backend.models import SecurityEvent
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Full 42-feature model
+# ==========================================================
+# Full 42-Feature UNSW Model
+# ==========================================================
+
 MODEL_PATH = (
     BASE_DIR
     / "ml"
@@ -36,19 +40,22 @@ CONFIG_PATH = (
 )
 
 
-# Live network model
-LIVE_MODEL_PATH = (
+# ==========================================================
+# Live Anomaly Detection Model V3
+# ==========================================================
+
+LIVE_V3_MODEL_PATH = (
     BASE_DIR
     / "ml"
     / "models"
-    / "live_intrusion_model.joblib"
+    / "live_anomaly_model_v3.joblib"
 )
 
-LIVE_CONFIG_PATH = (
+LIVE_V3_CONFIG_PATH = (
     BASE_DIR
     / "ml"
     / "models"
-    / "live_model_config.json"
+    / "live_anomaly_model_v3_config.json"
 )
 
 
@@ -62,22 +69,24 @@ model = joblib.load(
 
 with open(
     CONFIG_PATH,
-    "r"
+    "r",
 ) as file:
+
     config = json.load(
         file
     )
 
 
-live_model = joblib.load(
-    LIVE_MODEL_PATH
+live_v3_model = joblib.load(
+    LIVE_V3_MODEL_PATH
 )
 
 with open(
-    LIVE_CONFIG_PATH,
-    "r"
+    LIVE_V3_CONFIG_PATH,
+    "r",
 ) as file:
-    live_config = json.load(
+
+    live_v3_config = json.load(
         file
     )
 
@@ -88,8 +97,11 @@ with open(
 
 app = FastAPI(
     title="AI Cybersecurity Platform",
-    description="AI-powered Network Intrusion Detection System",
-    version="1.0.0"
+    description=(
+        "AI-powered Network Intrusion "
+        "and Live Anomaly Detection System"
+    ),
+    version="1.2.0",
 )
 
 
@@ -102,7 +114,7 @@ app.add_middleware(
 
     allow_origins=[
         "http://localhost:5173",
-        "http://127.0.0.1:5173"
+        "http://127.0.0.1:5173",
     ],
 
     allow_credentials=True,
@@ -118,7 +130,7 @@ app.add_middleware(
 # ==========================================================
 
 def get_severity(
-    risk_score: float
+    risk_score: float,
 ) -> str:
 
     if risk_score < 55:
@@ -135,11 +147,11 @@ def get_severity(
 
 
 # ==========================================================
-# Severity - Live Network Model
+# Severity - Live V3 Model
 # ==========================================================
 
 def get_live_severity(
-    risk_score: float
+    risk_score: float,
 ) -> str:
 
     if risk_score < 50:
@@ -156,6 +168,58 @@ def get_live_severity(
 
 
 # ==========================================================
+# Convert V3 Anomaly Score to Dashboard Risk Score
+#
+# IMPORTANT:
+# Risk score is NOT attack probability.
+#
+# Risk = approximately 50 at anomaly threshold.
+# Lower anomaly score = lower risk.
+# Higher anomaly score = higher risk.
+# ==========================================================
+
+def anomaly_score_to_risk(
+    anomaly_score: float,
+    threshold: float,
+) -> float:
+
+    scale = max(
+        abs(threshold) * 0.08,
+        0.05,
+    )
+
+    normalized_distance = (
+        anomaly_score
+        - threshold
+    ) / scale
+
+    normalized_distance = max(
+        -12.0,
+        min(
+            12.0,
+            normalized_distance,
+        ),
+    )
+
+    risk_score = (
+        100.0
+        /
+        (
+            1.0
+            +
+            math.exp(
+                -normalized_distance
+            )
+        )
+    )
+
+    return round(
+        risk_score,
+        2,
+    )
+
+
+# ==========================================================
 # Root
 # ==========================================================
 
@@ -163,11 +227,15 @@ def get_live_severity(
 def root():
 
     return {
+
         "message":
             "AI Cybersecurity Platform API",
 
         "status":
-            "running"
+            "running",
+
+        "live_detection":
+            "One-Class SVM V3",
     }
 
 
@@ -193,10 +261,29 @@ def health():
             config["model"],
 
         "live_model":
-            live_config["model"],
+            live_v3_config[
+                "model_name"
+            ],
 
-        "threshold":
-            config["threshold"],
+        "live_algorithm":
+            live_v3_config[
+                "algorithm"
+            ],
+
+        "full_model_threshold":
+            config[
+                "threshold"
+            ],
+
+        "live_anomaly_threshold":
+            live_v3_config[
+                "anomaly_threshold"
+            ],
+
+        "live_threshold_percentile":
+            live_v3_config[
+                "threshold_percentile"
+            ],
 
         "number_of_features":
             len(
@@ -207,10 +294,10 @@ def health():
 
         "live_number_of_features":
             len(
-                live_config[
-                    "feature_columns"
+                live_v3_config[
+                    "features"
                 ]
-            )
+            ),
     }
 
 
@@ -233,7 +320,7 @@ def features():
         "features":
             config[
                 "feature_columns"
-            ]
+            ],
     }
 
 
@@ -246,17 +333,37 @@ def live_features():
 
     return {
 
+        "model":
+            live_v3_config[
+                "model_name"
+            ],
+
+        "algorithm":
+            live_v3_config[
+                "algorithm"
+            ],
+
         "number_of_features":
             len(
-                live_config[
-                    "feature_columns"
+                live_v3_config[
+                    "features"
                 ]
             ),
 
         "features":
-            live_config[
-                "feature_columns"
-            ]
+            live_v3_config[
+                "features"
+            ],
+
+        "anomaly_threshold":
+            live_v3_config[
+                "anomaly_threshold"
+            ],
+
+        "threshold_percentile":
+            live_v3_config[
+                "threshold_percentile"
+            ],
     }
 
 
@@ -266,7 +373,7 @@ def live_features():
 
 @app.post("/predict")
 def predict(
-    payload: dict
+    payload: dict,
 ):
 
     required_features = (
@@ -274,7 +381,6 @@ def predict(
             "feature_columns"
         ]
     )
-
 
     missing_features = [
 
@@ -286,7 +392,6 @@ def predict(
         if feature
         not in payload
     ]
-
 
     if missing_features:
 
@@ -300,10 +405,9 @@ def predict(
                     "Missing required features",
 
                 "missing_features":
-                    missing_features
-            }
+                    missing_features,
+            },
         )
-
 
     input_data = {
 
@@ -314,13 +418,11 @@ def predict(
         in required_features
     }
 
-
     input_df = pd.DataFrame(
         [
             input_data
         ]
     )
-
 
     attack_score = float(
 
@@ -329,13 +431,11 @@ def predict(
         )[0][1]
     )
 
-
     threshold = float(
         config[
             "threshold"
         ]
     )
-
 
     prediction = (
 
@@ -347,22 +447,20 @@ def predict(
         else "NORMAL"
     )
 
-
     risk_score = round(
         attack_score
         * 100,
-        2
+        2,
     )
-
 
     severity = get_severity(
         risk_score
     )
 
 
-    # ------------------------------------------------------
-    # Save to PostgreSQL
-    # ------------------------------------------------------
+    # ======================================================
+    # Save Dataset Model Event to PostgreSQL
+    # ======================================================
 
     with SessionLocal() as db:
 
@@ -378,6 +476,7 @@ def predict(
                 severity,
 
             protocol=(
+
                 str(
                     payload.get(
                         "proto"
@@ -393,6 +492,7 @@ def predict(
             ),
 
             service=(
+
                 str(
                     payload.get(
                         "service"
@@ -408,6 +508,7 @@ def predict(
             ),
 
             state=(
+
                 str(
                     payload.get(
                         "state"
@@ -423,6 +524,7 @@ def predict(
             ),
 
             duration=(
+
                 float(
                     payload.get(
                         "dur"
@@ -438,6 +540,7 @@ def predict(
             ),
 
             source_bytes=(
+
                 int(
                     payload.get(
                         "sbytes"
@@ -453,6 +556,7 @@ def predict(
             ),
 
             destination_bytes=(
+
                 int(
                     payload.get(
                         "dbytes"
@@ -465,9 +569,20 @@ def predict(
                 is not None
 
                 else None
-            )
-        )
+            ),
 
+            is_anomaly=
+                None,
+
+            anomaly_score=
+                None,
+
+            anomaly_threshold=
+                None,
+
+            detection_source=
+                "DATASET_MODEL",
+        )
 
         db.add(
             event
@@ -495,6 +610,12 @@ def predict(
         "prediction":
             prediction,
 
+        "attack_probability":
+            round(
+                attack_score,
+                4,
+            ),
+
         "risk_score":
             risk_score,
 
@@ -502,25 +623,24 @@ def predict(
             severity,
 
         "threshold":
-            threshold
+            threshold,
     }
 
 
 # ==========================================================
-# Live Network Prediction
+# Live Network Prediction - One-Class SVM V3
 # ==========================================================
 
 @app.post("/predict/live")
 def predict_live(
-    payload: dict
+    payload: dict,
 ):
 
     required_features = (
-        live_config[
-            "feature_columns"
+        live_v3_config[
+            "features"
         ]
     )
-
 
     missing_features = [
 
@@ -532,7 +652,6 @@ def predict_live(
         if feature
         not in payload
     ]
-
 
     if missing_features:
 
@@ -546,8 +665,8 @@ def predict_live(
                     "Missing live traffic features",
 
                 "missing_features":
-                    missing_features
-            }
+                    missing_features,
+            },
         )
 
 
@@ -568,49 +687,67 @@ def predict_live(
     )
 
 
-    attack_probability = float(
+    # ======================================================
+    # One-Class SVM Anomaly Score
+    #
+    # Higher score = more anomalous
+    # ======================================================
 
-        live_model.predict_proba(
+    anomaly_score = float(
+
+        -live_v3_model.score_samples(
             input_df
-        )[0][1]
+        )[0]
     )
 
 
-    # Live model threshold
-    threshold = 0.50
+    anomaly_threshold = float(
+
+        live_v3_config[
+            "anomaly_threshold"
+        ]
+    )
+
+
+    is_anomaly = (
+        anomaly_score
+        >= anomaly_threshold
+    )
 
 
     prediction = (
 
         "ATTACK"
 
-        if attack_probability
-        >= threshold
+        if is_anomaly
 
         else "NORMAL"
     )
 
 
-    risk_score = round(
+    # ======================================================
+    # Dashboard-Compatible Risk Score
+    #
+    # This is an anomaly risk score,
+    # NOT attack probability.
+    # ======================================================
 
-        attack_probability
-        * 100,
-
-        2
+    risk_score = (
+        anomaly_score_to_risk(
+            anomaly_score,
+            anomaly_threshold,
+        )
     )
 
-
-    # IMPORTANT:
-    # Live model uses its own severity thresholds
 
     severity = get_live_severity(
         risk_score
     )
 
 
-    # ------------------------------------------------------
-    # Save Live Event to PostgreSQL
-    # ------------------------------------------------------
+    # ======================================================
+    # Save V3 Event to PostgreSQL
+    # ======================================================
 
     with SessionLocal() as db:
 
@@ -626,6 +763,7 @@ def predict_live(
                 severity,
 
             protocol=(
+
                 str(
                     payload.get(
                         "proto"
@@ -650,7 +788,7 @@ def predict_live(
                 float(
                     payload.get(
                         "dur",
-                        0
+                        0,
                     )
                 ),
 
@@ -658,7 +796,7 @@ def predict_live(
                 int(
                     payload.get(
                         "sbytes",
-                        0
+                        0,
                     )
                 ),
 
@@ -666,11 +804,28 @@ def predict_live(
                 int(
                     payload.get(
                         "dbytes",
-                        0
+                        0,
                     )
-                )
-        )
+                ),
 
+            is_anomaly=
+                bool(
+                    is_anomaly
+                ),
+
+            anomaly_score=
+                float(
+                    anomaly_score
+                ),
+
+            anomaly_threshold=
+                float(
+                    anomaly_threshold
+                ),
+
+            detection_source=
+                "LIVE_ANOMALY_V3",
+        )
 
         db.add(
             event
@@ -693,16 +848,42 @@ def predict_live(
             event_id,
 
         "source":
-            "LIVE_NETWORK",
+            "LIVE_ANOMALY_V3",
+
+        "model":
+            live_v3_config[
+                "model_name"
+            ],
+
+        "algorithm":
+            live_v3_config[
+                "algorithm"
+            ],
 
         "prediction":
             prediction,
 
-        "attack_probability":
-            round(
-                attack_probability,
-                4
+        "is_anomaly":
+            bool(
+                is_anomaly
             ),
+
+        "anomaly_score":
+            round(
+                anomaly_score,
+                6,
+            ),
+
+        "anomaly_threshold":
+            round(
+                anomaly_threshold,
+                6,
+            ),
+
+        "threshold_percentile":
+            live_v3_config[
+                "threshold_percentile"
+            ],
 
         "risk_score":
             risk_score,
@@ -710,8 +891,11 @@ def predict_live(
         "severity":
             severity,
 
-        "threshold":
-            threshold
+        # Temporary compatibility field.
+        # One-Class SVM does not produce
+        # attack probability.
+        "attack_probability":
+            None,
     }
 
 
@@ -721,7 +905,7 @@ def predict_live(
 
 @app.get("/events")
 def get_events(
-    limit: int = 50
+    limit: int = 50,
 ):
 
     with SessionLocal() as db:
@@ -781,7 +965,19 @@ def get_events(
                     event.source_bytes,
 
                 "destination_bytes":
-                    event.destination_bytes
+                    event.destination_bytes,
+
+                "is_anomaly":
+                    event.is_anomaly,
+
+                "anomaly_score":
+                    event.anomaly_score,
+
+                "anomaly_threshold":
+                    event.anomaly_threshold,
+
+                "detection_source":
+                    event.detection_source,
             }
 
             for event
@@ -795,7 +991,7 @@ def get_events(
 
 @app.get("/alerts")
 def get_alerts(
-    limit: int = 50
+    limit: int = 50,
 ):
 
     with SessionLocal() as db:
@@ -849,7 +1045,19 @@ def get_alerts(
                     event.service,
 
                 "state":
-                    event.state
+                    event.state,
+
+                "is_anomaly":
+                    event.is_anomaly,
+
+                "anomaly_score":
+                    event.anomaly_score,
+
+                "anomaly_threshold":
+                    event.anomaly_threshold,
+
+                "detection_source":
+                    event.detection_source,
             }
 
             for event
@@ -988,8 +1196,8 @@ def get_statistics():
                     float(
                         average_risk
                     ),
-                    2
-                )
+                    2,
+                ),
         }
 
 

@@ -1,0 +1,30 @@
+{
+    "model_name": "Live Network Anomaly Detector V3",
+    "algorithm": "OneClassSVM",
+    "kernel": "rbf",
+    "nu": 0.03,
+    "threshold_percentile": 0.975,
+    "anomaly_threshold": -1.2725288809245112,
+    "features": [
+        "dur",
+        "proto",
+        "spkts",
+        "dpkts",
+        "sbytes",
+        "dbytes",
+        "rate",
+        "sinpkt",
+        "dinpkt",
+        "smean",
+        "dmean"
+    ],
+    "training_flows": 474,
+    "calibration_flows": 102,
+    "test_flows": 102,
+    "baseline_test_alert_percent": 2.0,
+    "synthetic_stress_tests": {
+        "high_rate_burst_alert_percent": 61.0,
+        "outbound_data_spike_alert_percent": 85.0,
+        "packet_flood_alert_percent": 65.0
+    }
+}

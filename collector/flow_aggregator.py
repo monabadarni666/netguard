@@ -33,7 +33,7 @@ LIVE_DATA_PATH = (
     BASE_DIR
     / "ml"
     / "data"
-    / "live_flows.csv"
+    / "live_flows_v3_monitor.csv"
 )
 
 
@@ -41,7 +41,7 @@ flows = {}
 
 
 # ==========================================================
-# Packet helpers
+# Packet Helpers
 # ==========================================================
 
 def get_protocol(packet):
@@ -58,55 +58,116 @@ def get_protocol(packet):
 def get_ports(packet):
 
     if TCP in packet:
+
         return (
-            packet[TCP].sport,
-            packet[TCP].dport
+            int(packet[TCP].sport),
+            int(packet[TCP].dport),
         )
 
     if UDP in packet:
+
         return (
-            packet[UDP].sport,
-            packet[UDP].dport
+            int(packet[UDP].sport),
+            int(packet[UDP].dport),
         )
 
     return 0, 0
 
 
-# ==========================================================
-# Bidirectional flow key
-# ==========================================================
+def get_ip_packet_size(packet):
 
-def canonical_flow_key(
-    src_ip,
-    dst_ip,
-    src_port,
-    dst_port,
-    protocol
-):
+    ip_length = packet[IP].len
 
-    endpoint_a = (
-        src_ip,
-        src_port
-    )
+    if ip_length is not None:
+        return int(ip_length)
 
-    endpoint_b = (
-        dst_ip,
-        dst_port
-    )
-
-    if endpoint_a <= endpoint_b:
-
-        return (
-            endpoint_a,
-            endpoint_b,
-            protocol
+    return len(
+        bytes(
+            packet[IP]
         )
-
-    return (
-        endpoint_b,
-        endpoint_a,
-        protocol
     )
+
+
+# ==========================================================
+# Normalize Flow Direction
+#
+# LOCAL MAC = SOURCE
+# REMOTE HOST = DESTINATION
+# ==========================================================
+
+def get_normalized_flow_info(packet):
+
+    src_ip = packet[IP].src
+    dst_ip = packet[IP].dst
+
+    src_port, dst_port = get_ports(
+        packet
+    )
+
+    protocol = get_protocol(
+        packet
+    )
+
+
+    # Outgoing:
+    # Local Mac -> Remote
+
+    if src_ip == LOCAL_IP:
+
+        local_port = src_port
+        remote_port = dst_port
+        remote_ip = dst_ip
+        direction = "outbound"
+
+
+    # Incoming:
+    # Remote -> Local Mac
+
+    elif dst_ip == LOCAL_IP:
+
+        local_port = dst_port
+        remote_port = src_port
+        remote_ip = src_ip
+        direction = "inbound"
+
+
+    else:
+
+        return None
+
+
+    key = (
+        LOCAL_IP,
+        remote_ip,
+        local_port,
+        remote_port,
+        protocol,
+    )
+
+
+    return {
+
+        "key":
+            key,
+
+        "local_ip":
+            LOCAL_IP,
+
+        "remote_ip":
+            remote_ip,
+
+        "local_port":
+            local_port,
+
+        "remote_port":
+            remote_port,
+
+        "protocol":
+            protocol,
+
+        "direction":
+            direction,
+    }
 
 
 # ==========================================================
@@ -114,37 +175,47 @@ def canonical_flow_key(
 # ==========================================================
 
 def create_flow(
-    src_ip,
-    dst_ip,
-    src_port,
-    dst_port,
-    protocol,
-    timestamp
+    normalized,
+    timestamp,
 ):
 
     return {
 
-        "src_ip": src_ip,
-        "dst_ip": dst_ip,
+        "src_ip":
+            normalized["local_ip"],
 
-        "src_port": src_port,
-        "dst_port": dst_port,
+        "dst_ip":
+            normalized["remote_ip"],
 
-        "protocol": protocol,
+        "src_port":
+            normalized["local_port"],
 
-        "start_time": timestamp,
-        "last_time": timestamp,
+        "dst_port":
+            normalized["remote_port"],
 
+        "protocol":
+            normalized["protocol"],
+
+        "start_time":
+            timestamp,
+
+        "last_time":
+            timestamp,
+
+        # Local Mac -> Remote
         "spkts": 0,
-        "dpkts": 0,
-
         "sbytes": 0,
+
+        # Remote -> Local Mac
+        "dpkts": 0,
         "dbytes": 0,
 
         "source_packet_times": [],
+
         "destination_packet_times": [],
 
         "source_packet_sizes": [],
+
         "destination_packet_sizes": [],
     }
 
@@ -158,38 +229,26 @@ def update_flow(packet):
     if IP not in packet:
         return
 
-    src_ip = packet[IP].src
-    dst_ip = packet[IP].dst
 
-    src_port, dst_port = get_ports(
+    normalized = get_normalized_flow_info(
         packet
     )
 
-    protocol = get_protocol(
-        packet
-    )
+
+    if normalized is None:
+        return
+
+
+    key = normalized["key"]
 
     now = time.time()
-
-
-    key = canonical_flow_key(
-        src_ip,
-        dst_ip,
-        src_port,
-        dst_port,
-        protocol
-    )
 
 
     if key not in flows:
 
         flows[key] = create_flow(
-            src_ip,
-            dst_ip,
-            src_port,
-            dst_port,
-            protocol,
-            now
+            normalized,
+            now,
         )
 
 
@@ -197,14 +256,15 @@ def update_flow(packet):
 
     flow["last_time"] = now
 
-    packet_size = len(packet)
+
+    packet_size = get_ip_packet_size(
+        packet
+    )
 
 
-    if (
-        src_ip == flow["src_ip"]
-        and
-        src_port == flow["src_port"]
-    ):
+    # Local Mac -> Remote
+
+    if normalized["direction"] == "outbound":
 
         flow["spkts"] += 1
 
@@ -212,11 +272,18 @@ def update_flow(packet):
 
         flow[
             "source_packet_times"
-        ].append(now)
+        ].append(
+            now
+        )
 
         flow[
             "source_packet_sizes"
-        ].append(packet_size)
+        ].append(
+            packet_size
+        )
+
+
+    # Remote -> Local Mac
 
     else:
 
@@ -226,15 +293,19 @@ def update_flow(packet):
 
         flow[
             "destination_packet_times"
-        ].append(now)
+        ].append(
+            now
+        )
 
         flow[
             "destination_packet_sizes"
-        ].append(packet_size)
+        ].append(
+            packet_size
+        )
 
 
 # ==========================================================
-# Feature calculations
+# Feature Calculations
 # ==========================================================
 
 def mean(values):
@@ -253,23 +324,25 @@ def average_interval_ms(times):
     if len(times) < 2:
         return 0.0
 
+
     intervals = [
 
         times[i]
-        -
-        times[i - 1]
+        - times[i - 1]
 
         for i
         in range(
             1,
-            len(times)
+            len(times),
         )
     ]
+
 
     average_seconds = (
         sum(intervals)
         / len(intervals)
     )
+
 
     return (
         average_seconds
@@ -278,62 +351,68 @@ def average_interval_ms(times):
 
 
 # ==========================================================
-# Extract ML Features
+# Extract Features
 # ==========================================================
 
 def extract_features(flow):
 
     duration = (
         flow["last_time"]
-        -
-        flow["start_time"]
+        - flow["start_time"]
     )
 
 
     safe_duration = max(
         duration,
-        0.000001
+        0.000001,
     )
 
 
     total_packets = (
         flow["spkts"]
-        +
-        flow["dpkts"]
+        + flow["dpkts"]
     )
 
 
     rate = (
         total_packets
-        /
-        safe_duration
+        / safe_duration
     )
 
 
     rate = min(
         rate,
-        1_000_000.0
+        1_000_000.0,
     )
 
 
     return {
 
-        "dur": float(duration),
+        "dur":
+            float(duration),
 
         "proto":
             flow["protocol"],
 
         "spkts":
-            int(flow["spkts"]),
+            int(
+                flow["spkts"]
+            ),
 
         "dpkts":
-            int(flow["dpkts"]),
+            int(
+                flow["dpkts"]
+            ),
 
         "sbytes":
-            int(flow["sbytes"]),
+            int(
+                flow["sbytes"]
+            ),
 
         "dbytes":
-            int(flow["dbytes"]),
+            int(
+                flow["dbytes"]
+            ),
 
         "rate":
             float(rate),
@@ -377,26 +456,25 @@ def extract_features(flow):
 
 
 # ==========================================================
-# Flow filtering
+# Filter Bad / Meaningless Flows
 # ==========================================================
 
 def should_analyze_flow(features):
 
     total_packets = (
         features["spkts"]
-        +
-        features["dpkts"]
+        + features["dpkts"]
     )
 
 
     if features["proto"] not in {
         "tcp",
-        "udp"
+        "udp",
     }:
 
         return (
             False,
-            "unsupported protocol"
+            "unsupported protocol",
         )
 
 
@@ -404,7 +482,7 @@ def should_analyze_flow(features):
 
         return (
             False,
-            "too few packets"
+            "too few packets",
         )
 
 
@@ -412,18 +490,18 @@ def should_analyze_flow(features):
 
         return (
             False,
-            "flow duration too short"
+            "flow duration too short",
         )
 
 
     return (
         True,
-        None
+        None,
     )
 
 
 # ==========================================================
-# Send to AI
+# Send Flow to AI Backend
 # ==========================================================
 
 def send_to_ai(features):
@@ -433,34 +511,40 @@ def send_to_ai(features):
         response = requests.post(
             API_URL,
             json=features,
-            timeout=10
+            timeout=10,
         )
+
 
         response.raise_for_status()
 
+
         return response.json()
+
 
     except requests.RequestException as error:
 
         print()
+
         print(
             "Could not send flow "
             "to AI backend:"
         )
 
-        print(error)
+        print(
+            error
+        )
 
         return None
 
 
 # ==========================================================
-# Save Live Flow to CSV
+# Save V3 Monitoring Result to CSV
 # ==========================================================
 
 def save_live_flow(
     flow,
     features,
-    result
+    result,
 ):
 
     file_exists = (
@@ -498,9 +582,18 @@ def save_live_flow(
         "dmean",
 
         "prediction",
+
+        "is_anomaly",
+
+        "anomaly_score",
+
+        "anomaly_threshold",
+
+        "threshold_percentile",
+
         "risk_score",
+
         "severity",
-        "attack_probability",
     ]
 
 
@@ -557,28 +650,39 @@ def save_live_flow(
         "prediction":
             result["prediction"],
 
+        "is_anomaly":
+            result["is_anomaly"],
+
+        "anomaly_score":
+            result["anomaly_score"],
+
+        "anomaly_threshold":
+            result[
+                "anomaly_threshold"
+            ],
+
+        "threshold_percentile":
+            result[
+                "threshold_percentile"
+            ],
+
         "risk_score":
             result["risk_score"],
 
         "severity":
             result["severity"],
-
-        "attack_probability":
-            result[
-                "attack_probability"
-            ],
     }
 
 
     with open(
         LIVE_DATA_PATH,
         "a",
-        newline=""
+        newline="",
     ) as csv_file:
 
         writer = csv.DictWriter(
             csv_file,
-            fieldnames=fieldnames
+            fieldnames=fieldnames,
         )
 
 
@@ -593,7 +697,7 @@ def save_live_flow(
 
 
 # ==========================================================
-# Process completed Flow
+# Process Completed Flow
 # ==========================================================
 
 def process_completed_flow(flow):
@@ -611,13 +715,18 @@ def process_completed_flow(flow):
     if not analyze:
 
         print()
-        print("=" * 76)
+
+        print(
+            "=" * 76
+        )
 
         print(
             f"SKIPPED FLOW: "
-            f"{flow['src_ip']}:{flow['src_port']} "
+            f"{flow['src_ip']}:"
+            f"{flow['src_port']} "
             f"<-> "
-            f"{flow['dst_ip']}:{flow['dst_port']}"
+            f"{flow['dst_ip']}:"
+            f"{flow['dst_port']}"
         )
 
         print(
@@ -628,14 +737,24 @@ def process_completed_flow(flow):
 
 
     print()
-    print("=" * 76)
+
+    print(
+        "=" * 76
+    )
 
 
     print(
         f"FLOW: "
-        f"{flow['src_ip']}:{flow['src_port']} "
-        f"<-> "
-        f"{flow['dst_ip']}:{flow['dst_port']}"
+        f"{flow['src_ip']}:"
+        f"{flow['src_port']} "
+        f"-> "
+        f"{flow['dst_ip']}:"
+        f"{flow['dst_port']}"
+    )
+
+
+    print(
+        "Source: LOCAL MAC"
     )
 
 
@@ -708,7 +827,7 @@ def process_completed_flow(flow):
     print()
 
     print(
-        "AI PREDICTION"
+        "AI ANOMALY PREDICTION"
     )
 
 
@@ -719,8 +838,44 @@ def process_completed_flow(flow):
 
 
     print(
+        f"Model: "
+        f"{result['model']}"
+    )
+
+
+    print(
+        f"Algorithm: "
+        f"{result['algorithm']}"
+    )
+
+
+    print(
         f"Prediction: "
         f"{result['prediction']}"
+    )
+
+
+    print(
+        f"Is Anomaly: "
+        f"{result['is_anomaly']}"
+    )
+
+
+    print(
+        f"Anomaly Score: "
+        f"{result['anomaly_score']}"
+    )
+
+
+    print(
+        f"Anomaly Threshold: "
+        f"{result['anomaly_threshold']}"
+    )
+
+
+    print(
+        f"Threshold Percentile: "
+        f"{result['threshold_percentile']}"
     )
 
 
@@ -736,22 +891,16 @@ def process_completed_flow(flow):
     )
 
 
-    print(
-        f"Attack probability: "
-        f"{result['attack_probability']}"
-    )
-
-
-    # Save successful AI result
     save_live_flow(
         flow,
         features,
-        result
+        result,
     )
 
 
     print(
-        "Saved to live_flows.csv"
+        "Saved to "
+        "live_flows_v3_monitor.csv"
     )
 
 
@@ -770,8 +919,7 @@ def expire_flows():
 
         inactive_time = (
             now
-            -
-            flow["last_time"]
+            - flow["last_time"]
         )
 
 
@@ -812,17 +960,22 @@ def process_packet(packet):
 
 def main():
 
-    print("=" * 76)
+    print(
+        "=" * 76
+    )
 
     print(
         "AI CYBERSECURITY PLATFORM"
     )
 
     print(
-        "REAL-TIME AI NETWORK MONITOR"
+        "REAL-TIME AI NETWORK "
+        "MONITOR V3"
     )
 
-    print("=" * 76)
+    print(
+        "=" * 76
+    )
 
     print()
 
@@ -832,6 +985,11 @@ def main():
 
     print(
         f"Local IP: {LOCAL_IP}"
+    )
+
+    print(
+        "Flow direction: "
+        "LOCAL MAC -> REMOTE"
     )
 
     print(
@@ -852,13 +1010,8 @@ def main():
     print()
 
     print(
-        "Only meaningful TCP/UDP flows "
-        "will be analyzed."
-    )
-
-    print(
-        "Analyzed flows will also be "
-        "saved to CSV."
+        "AI model: "
+        "One-Class SVM V3"
     )
 
     print()
@@ -881,7 +1034,7 @@ def main():
             iface=INTERFACE,
             filter=capture_filter,
             prn=process_packet,
-            store=False
+            store=False,
         )
 
 
@@ -913,4 +1066,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
