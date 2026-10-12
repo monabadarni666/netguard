@@ -1,4 +1,3 @@
-<img width="2880" height="1617" alt="image" src="https://github.com/user-attachments/assets/82e0d40d-fb69-4e17-b768-54320ba36d0a" /># NetGuard
 
 ### AI-Powered Real-Time Network Anomaly Detection Platform
 
