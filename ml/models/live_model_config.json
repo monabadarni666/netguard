@@ -1,0 +1,20 @@
+{
+    "model": "RandomForestClassifier",
+    "purpose": "live_network_intrusion_detection",
+    "feature_columns": [
+        "dur",
+        "proto",
+        "spkts",
+        "dpkts",
+        "sbytes",
+        "dbytes",
+        "rate",
+        "sinpkt",
+        "dinpkt",
+        "smean",
+        "dmean"
+    ],
+    "categorical_features": [
+        "proto"
+    ]
+}

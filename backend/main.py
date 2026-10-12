@@ -19,6 +19,8 @@ from backend.models import SecurityEvent
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+# Full 42-feature model
 MODEL_PATH = (
     BASE_DIR
     / "ml"
@@ -34,18 +36,54 @@ CONFIG_PATH = (
 )
 
 
+# Live network model
+LIVE_MODEL_PATH = (
+    BASE_DIR
+    / "ml"
+    / "models"
+    / "live_intrusion_model.joblib"
+)
+
+LIVE_CONFIG_PATH = (
+    BASE_DIR
+    / "ml"
+    / "models"
+    / "live_model_config.json"
+)
+
+
 # ==========================================================
-# Load ML model and configuration
+# Load Models
 # ==========================================================
 
-model = joblib.load(MODEL_PATH)
+model = joblib.load(
+    MODEL_PATH
+)
 
-with open(CONFIG_PATH, "r") as file:
-    config = json.load(file)
+with open(
+    CONFIG_PATH,
+    "r"
+) as file:
+    config = json.load(
+        file
+    )
+
+
+live_model = joblib.load(
+    LIVE_MODEL_PATH
+)
+
+with open(
+    LIVE_CONFIG_PATH,
+    "r"
+) as file:
+    live_config = json.load(
+        file
+    )
 
 
 # ==========================================================
-# FastAPI application
+# FastAPI Application
 # ==========================================================
 
 app = FastAPI(
@@ -57,26 +95,32 @@ app = FastAPI(
 
 # ==========================================================
 # CORS
-# Allows React frontend to communicate with FastAPI
 # ==========================================================
 
 app.add_middleware(
     CORSMiddleware,
+
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173"
     ],
+
     allow_credentials=True,
+
     allow_methods=["*"],
+
     allow_headers=["*"],
 )
 
 
 # ==========================================================
-# Helper functions
+# Severity - Full Dataset Model
 # ==========================================================
 
-def get_severity(risk_score: float) -> str:
+def get_severity(
+    risk_score: float
+) -> str:
+
     if risk_score < 55:
         return "LOW"
 
@@ -91,138 +135,225 @@ def get_severity(risk_score: float) -> str:
 
 
 # ==========================================================
-# Root endpoint
+# Severity - Live Network Model
+# ==========================================================
+
+def get_live_severity(
+    risk_score: float
+) -> str:
+
+    if risk_score < 50:
+        return "LOW"
+
+    elif risk_score < 70:
+        return "MEDIUM"
+
+    elif risk_score < 85:
+        return "HIGH"
+
+    else:
+        return "CRITICAL"
+
+
+# ==========================================================
+# Root
 # ==========================================================
 
 @app.get("/")
 def root():
+
     return {
-        "message": "AI Cybersecurity Platform API",
-        "status": "running"
+        "message":
+            "AI Cybersecurity Platform API",
+
+        "status":
+            "running"
     }
 
 
 # ==========================================================
-# Health check
+# Health
 # ==========================================================
 
 @app.get("/health")
 def health():
+
     return {
-        "status": "healthy",
-        "model_loaded": True,
-        "model": config["model"],
-        "threshold": config["threshold"],
-        "number_of_features": len(
-            config["feature_columns"]
-        )
+
+        "status":
+            "healthy",
+
+        "full_model_loaded":
+            True,
+
+        "live_model_loaded":
+            True,
+
+        "full_model":
+            config["model"],
+
+        "live_model":
+            live_config["model"],
+
+        "threshold":
+            config["threshold"],
+
+        "number_of_features":
+            len(
+                config[
+                    "feature_columns"
+                ]
+            ),
+
+        "live_number_of_features":
+            len(
+                live_config[
+                    "feature_columns"
+                ]
+            )
     }
 
 
 # ==========================================================
-# Model features
+# Full Model Features
 # ==========================================================
 
 @app.get("/features")
 def features():
+
     return {
-        "number_of_features": len(
-            config["feature_columns"]
-        ),
-        "features": config["feature_columns"]
+
+        "number_of_features":
+            len(
+                config[
+                    "feature_columns"
+                ]
+            ),
+
+        "features":
+            config[
+                "feature_columns"
+            ]
     }
 
 
 # ==========================================================
-# AI Prediction
+# Live Model Features
+# ==========================================================
+
+@app.get("/features/live")
+def live_features():
+
+    return {
+
+        "number_of_features":
+            len(
+                live_config[
+                    "feature_columns"
+                ]
+            ),
+
+        "features":
+            live_config[
+                "feature_columns"
+            ]
+    }
+
+
+# ==========================================================
+# Full Model Prediction
 # ==========================================================
 
 @app.post("/predict")
-def predict(payload: dict):
+def predict(
+    payload: dict
+):
 
-    required_features = config["feature_columns"]
+    required_features = (
+        config[
+            "feature_columns"
+        ]
+    )
 
-    # ------------------------------------------------------
-    # Check missing features
-    # ------------------------------------------------------
 
     missing_features = [
+
         feature
-        for feature in required_features
-        if feature not in payload
+
+        for feature
+        in required_features
+
+        if feature
+        not in payload
     ]
 
+
     if missing_features:
+
         raise HTTPException(
+
             status_code=422,
+
             detail={
-                "message": "Missing required features",
-                "missing_features": missing_features
+
+                "message":
+                    "Missing required features",
+
+                "missing_features":
+                    missing_features
             }
         )
 
 
-    # ------------------------------------------------------
-    # Keep only features expected by model
-    # ------------------------------------------------------
-
     input_data = {
-        feature: payload[feature]
-        for feature in required_features
+
+        feature:
+            payload[feature]
+
+        for feature
+        in required_features
     }
 
 
-    # ------------------------------------------------------
-    # Convert request into one-row DataFrame
-    # ------------------------------------------------------
-
     input_df = pd.DataFrame(
-        [input_data]
+        [
+            input_data
+        ]
     )
 
-
-    # ------------------------------------------------------
-    # Predict attack probability
-    # ------------------------------------------------------
 
     attack_score = float(
-        model.predict_proba(input_df)[0][1]
+
+        model.predict_proba(
+            input_df
+        )[0][1]
     )
 
-
-    # ------------------------------------------------------
-    # Threshold
-    # ------------------------------------------------------
 
     threshold = float(
-        config["threshold"]
+        config[
+            "threshold"
+        ]
     )
 
 
-    # ------------------------------------------------------
-    # Final prediction
-    # ------------------------------------------------------
-
     prediction = (
+
         "ATTACK"
-        if attack_score >= threshold
+
+        if attack_score
+        >= threshold
+
         else "NORMAL"
     )
 
 
-    # ------------------------------------------------------
-    # Risk score
-    # ------------------------------------------------------
-
     risk_score = round(
-        attack_score * 100,
+        attack_score
+        * 100,
         2
     )
 
-
-    # ------------------------------------------------------
-    # Severity
-    # ------------------------------------------------------
 
     severity = get_severity(
         risk_score
@@ -230,96 +361,386 @@ def predict(payload: dict):
 
 
     # ------------------------------------------------------
-    # Save event to PostgreSQL
+    # Save to PostgreSQL
     # ------------------------------------------------------
 
     with SessionLocal() as db:
 
         event = SecurityEvent(
 
-            prediction=prediction,
+            prediction=
+                prediction,
 
-            risk_score=risk_score,
+            risk_score=
+                risk_score,
 
-            severity=severity,
+            severity=
+                severity,
 
             protocol=(
-                str(payload.get("proto"))
-                if payload.get("proto") is not None
+                str(
+                    payload.get(
+                        "proto"
+                    )
+                )
+
+                if payload.get(
+                    "proto"
+                )
+                is not None
+
                 else None
             ),
 
             service=(
-                str(payload.get("service"))
-                if payload.get("service") is not None
+                str(
+                    payload.get(
+                        "service"
+                    )
+                )
+
+                if payload.get(
+                    "service"
+                )
+                is not None
+
                 else None
             ),
 
             state=(
-                str(payload.get("state"))
-                if payload.get("state") is not None
+                str(
+                    payload.get(
+                        "state"
+                    )
+                )
+
+                if payload.get(
+                    "state"
+                )
+                is not None
+
                 else None
             ),
 
             duration=(
-                float(payload.get("dur"))
-                if payload.get("dur") is not None
+                float(
+                    payload.get(
+                        "dur"
+                    )
+                )
+
+                if payload.get(
+                    "dur"
+                )
+                is not None
+
                 else None
             ),
 
             source_bytes=(
-                int(payload.get("sbytes"))
-                if payload.get("sbytes") is not None
+                int(
+                    payload.get(
+                        "sbytes"
+                    )
+                )
+
+                if payload.get(
+                    "sbytes"
+                )
+                is not None
+
                 else None
             ),
 
             destination_bytes=(
-                int(payload.get("dbytes"))
-                if payload.get("dbytes") is not None
+                int(
+                    payload.get(
+                        "dbytes"
+                    )
+                )
+
+                if payload.get(
+                    "dbytes"
+                )
+                is not None
+
                 else None
             )
         )
 
-        db.add(event)
+
+        db.add(
+            event
+        )
 
         db.commit()
 
-        db.refresh(event)
+        db.refresh(
+            event
+        )
 
-        event_id = event.id
+        event_id = (
+            event.id
+        )
 
-
-    # ------------------------------------------------------
-    # Return prediction
-    # ------------------------------------------------------
 
     return {
-        "event_id": event_id,
-        "prediction": prediction,
-        "risk_score": risk_score,
-        "severity": severity,
-        "threshold": threshold
+
+        "event_id":
+            event_id,
+
+        "source":
+            "DATASET_MODEL",
+
+        "prediction":
+            prediction,
+
+        "risk_score":
+            risk_score,
+
+        "severity":
+            severity,
+
+        "threshold":
+            threshold
     }
 
 
 # ==========================================================
-# Get recent security events
+# Live Network Prediction
+# ==========================================================
+
+@app.post("/predict/live")
+def predict_live(
+    payload: dict
+):
+
+    required_features = (
+        live_config[
+            "feature_columns"
+        ]
+    )
+
+
+    missing_features = [
+
+        feature
+
+        for feature
+        in required_features
+
+        if feature
+        not in payload
+    ]
+
+
+    if missing_features:
+
+        raise HTTPException(
+
+            status_code=422,
+
+            detail={
+
+                "message":
+                    "Missing live traffic features",
+
+                "missing_features":
+                    missing_features
+            }
+        )
+
+
+    input_data = {
+
+        feature:
+            payload[feature]
+
+        for feature
+        in required_features
+    }
+
+
+    input_df = pd.DataFrame(
+        [
+            input_data
+        ]
+    )
+
+
+    attack_probability = float(
+
+        live_model.predict_proba(
+            input_df
+        )[0][1]
+    )
+
+
+    # Live model threshold
+    threshold = 0.50
+
+
+    prediction = (
+
+        "ATTACK"
+
+        if attack_probability
+        >= threshold
+
+        else "NORMAL"
+    )
+
+
+    risk_score = round(
+
+        attack_probability
+        * 100,
+
+        2
+    )
+
+
+    # IMPORTANT:
+    # Live model uses its own severity thresholds
+
+    severity = get_live_severity(
+        risk_score
+    )
+
+
+    # ------------------------------------------------------
+    # Save Live Event to PostgreSQL
+    # ------------------------------------------------------
+
+    with SessionLocal() as db:
+
+        event = SecurityEvent(
+
+            prediction=
+                prediction,
+
+            risk_score=
+                risk_score,
+
+            severity=
+                severity,
+
+            protocol=(
+                str(
+                    payload.get(
+                        "proto"
+                    )
+                )
+
+                if payload.get(
+                    "proto"
+                )
+                is not None
+
+                else None
+            ),
+
+            service=
+                None,
+
+            state=
+                None,
+
+            duration=
+                float(
+                    payload.get(
+                        "dur",
+                        0
+                    )
+                ),
+
+            source_bytes=
+                int(
+                    payload.get(
+                        "sbytes",
+                        0
+                    )
+                ),
+
+            destination_bytes=
+                int(
+                    payload.get(
+                        "dbytes",
+                        0
+                    )
+                )
+        )
+
+
+        db.add(
+            event
+        )
+
+        db.commit()
+
+        db.refresh(
+            event
+        )
+
+        event_id = (
+            event.id
+        )
+
+
+    return {
+
+        "event_id":
+            event_id,
+
+        "source":
+            "LIVE_NETWORK",
+
+        "prediction":
+            prediction,
+
+        "attack_probability":
+            round(
+                attack_probability,
+                4
+            ),
+
+        "risk_score":
+            risk_score,
+
+        "severity":
+            severity,
+
+        "threshold":
+            threshold
+    }
+
+
+# ==========================================================
+# Recent Events
 # ==========================================================
 
 @app.get("/events")
-def get_events(limit: int = 50):
+def get_events(
+    limit: int = 50
+):
 
     with SessionLocal() as db:
 
         events = db.scalars(
 
-            select(SecurityEvent)
-
-            .order_by(
-                SecurityEvent.timestamp.desc()
+            select(
+                SecurityEvent
             )
 
-            .limit(limit)
+            .order_by(
+                SecurityEvent
+                .timestamp
+                .desc()
+            )
+
+            .limit(
+                limit
+            )
 
         ).all()
 
@@ -327,59 +748,79 @@ def get_events(limit: int = 50):
         return [
 
             {
-                "id": event.id,
 
-                "timestamp": (
-                    event.timestamp.isoformat()
-                ),
+                "id":
+                    event.id,
 
-                "prediction": event.prediction,
+                "timestamp":
+                    event.timestamp
+                    .isoformat(),
 
-                "risk_score": event.risk_score,
+                "prediction":
+                    event.prediction,
 
-                "severity": event.severity,
+                "risk_score":
+                    event.risk_score,
 
-                "protocol": event.protocol,
+                "severity":
+                    event.severity,
 
-                "service": event.service,
+                "protocol":
+                    event.protocol,
 
-                "state": event.state,
+                "service":
+                    event.service,
 
-                "duration": event.duration,
+                "state":
+                    event.state,
 
-                "source_bytes": event.source_bytes,
+                "duration":
+                    event.duration,
+
+                "source_bytes":
+                    event.source_bytes,
 
                 "destination_bytes":
                     event.destination_bytes
             }
 
-            for event in events
+            for event
+            in events
         ]
 
 
 # ==========================================================
-# Get attack alerts
+# Alerts
 # ==========================================================
 
 @app.get("/alerts")
-def get_alerts(limit: int = 50):
+def get_alerts(
+    limit: int = 50
+):
 
     with SessionLocal() as db:
 
         events = db.scalars(
 
-            select(SecurityEvent)
+            select(
+                SecurityEvent
+            )
 
             .where(
-                SecurityEvent.prediction
+                SecurityEvent
+                .prediction
                 == "ATTACK"
             )
 
             .order_by(
-                SecurityEvent.timestamp.desc()
+                SecurityEvent
+                .timestamp
+                .desc()
             )
 
-            .limit(limit)
+            .limit(
+                limit
+            )
 
         ).all()
 
@@ -387,29 +828,37 @@ def get_alerts(limit: int = 50):
         return [
 
             {
-                "id": event.id,
 
-                "timestamp": (
-                    event.timestamp.isoformat()
-                ),
+                "id":
+                    event.id,
 
-                "risk_score": event.risk_score,
+                "timestamp":
+                    event.timestamp
+                    .isoformat(),
 
-                "severity": event.severity,
+                "risk_score":
+                    event.risk_score,
 
-                "protocol": event.protocol,
+                "severity":
+                    event.severity,
 
-                "service": event.service,
+                "protocol":
+                    event.protocol,
 
-                "state": event.state
+                "service":
+                    event.service,
+
+                "state":
+                    event.state
             }
 
-            for event in events
+            for event
+            in events
         ]
 
 
 # ==========================================================
-# Security statistics
+# Statistics
 # ==========================================================
 
 @app.get("/statistics")
@@ -417,74 +866,107 @@ def get_statistics():
 
     with SessionLocal() as db:
 
-        total_events = db.scalar(
+        total_events = (
 
-            select(func.count())
+            db.scalar(
 
-            .select_from(
-                SecurityEvent
-            )
+                select(
+                    func.count()
+                )
 
-        ) or 0
-
-
-        attack_events = db.scalar(
-
-            select(func.count())
-
-            .select_from(
-                SecurityEvent
-            )
-
-            .where(
-                SecurityEvent.prediction
-                == "ATTACK"
-            )
-
-        ) or 0
-
-
-        normal_events = db.scalar(
-
-            select(func.count())
-
-            .select_from(
-                SecurityEvent
-            )
-
-            .where(
-                SecurityEvent.prediction
-                == "NORMAL"
-            )
-
-        ) or 0
-
-
-        critical_events = db.scalar(
-
-            select(func.count())
-
-            .select_from(
-                SecurityEvent
-            )
-
-            .where(
-                SecurityEvent.severity
-                == "CRITICAL"
-            )
-
-        ) or 0
-
-
-        average_risk = db.scalar(
-
-            select(
-                func.avg(
-                    SecurityEvent.risk_score
+                .select_from(
+                    SecurityEvent
                 )
             )
 
-        ) or 0
+            or 0
+        )
+
+
+        attack_events = (
+
+            db.scalar(
+
+                select(
+                    func.count()
+                )
+
+                .select_from(
+                    SecurityEvent
+                )
+
+                .where(
+                    SecurityEvent
+                    .prediction
+                    == "ATTACK"
+                )
+            )
+
+            or 0
+        )
+
+
+        normal_events = (
+
+            db.scalar(
+
+                select(
+                    func.count()
+                )
+
+                .select_from(
+                    SecurityEvent
+                )
+
+                .where(
+                    SecurityEvent
+                    .prediction
+                    == "NORMAL"
+                )
+            )
+
+            or 0
+        )
+
+
+        critical_events = (
+
+            db.scalar(
+
+                select(
+                    func.count()
+                )
+
+                .select_from(
+                    SecurityEvent
+                )
+
+                .where(
+                    SecurityEvent
+                    .severity
+                    == "CRITICAL"
+                )
+            )
+
+            or 0
+        )
+
+
+        average_risk = (
+
+            db.scalar(
+
+                select(
+
+                    func.avg(
+                        SecurityEvent
+                        .risk_score
+                    )
+                )
+            )
+
+            or 0
+        )
 
 
         return {
@@ -503,14 +985,16 @@ def get_statistics():
 
             "average_risk_score":
                 round(
-                    float(average_risk),
+                    float(
+                        average_risk
+                    ),
                     2
                 )
         }
 
 
 # ==========================================================
-# Analytics - Events by severity
+# Severity Analytics
 # ==========================================================
 
 @app.get("/analytics/severity")
@@ -521,12 +1005,18 @@ def severity_analytics():
         results = db.execute(
 
             select(
-                SecurityEvent.severity,
-                func.count(SecurityEvent.id)
+
+                SecurityEvent
+                .severity,
+
+                func.count(
+                    SecurityEvent.id
+                )
             )
 
             .group_by(
-                SecurityEvent.severity
+                SecurityEvent
+                .severity
             )
 
         ).all()
@@ -534,14 +1024,16 @@ def severity_analytics():
 
         return {
 
-            severity: count
+            severity:
+                count
 
-            for severity, count in results
+            for severity, count
+            in results
         }
 
 
 # ==========================================================
-# Analytics - Events by protocol
+# Protocol Analytics
 # ==========================================================
 
 @app.get("/analytics/protocols")
@@ -552,12 +1044,18 @@ def protocol_analytics():
         results = db.execute(
 
             select(
-                SecurityEvent.protocol,
-                func.count(SecurityEvent.id)
+
+                SecurityEvent
+                .protocol,
+
+                func.count(
+                    SecurityEvent.id
+                )
             )
 
             .group_by(
-                SecurityEvent.protocol
+                SecurityEvent
+                .protocol
             )
 
         ).all()
@@ -569,7 +1067,9 @@ def protocol_analytics():
                 protocol
                 if protocol
                 else "Unknown"
-            ): count
+            ):
+                count
 
-            for protocol, count in results
+            for protocol, count
+            in results
         }
